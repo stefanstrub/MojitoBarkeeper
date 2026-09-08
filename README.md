@@ -133,9 +133,3 @@ mojito_barkeeper-develop/
 └── test/
     └── test_lab.py
 ```
-
-## Integration with GlobalGB
-
-The parent **GlobalGB** repository installs this package as a path dependency and
-re-exports ``mojito_preprocessing_pipeline_kwargs`` from ``globalGB.config`` for
-L2/L3 submission metadata.
