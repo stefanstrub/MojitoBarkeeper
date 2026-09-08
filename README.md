@@ -95,7 +95,7 @@ save_result(
 
 For **saved pipeline outputs** (files with a ``globalgb/`` provenance group), use
 ``PipelineSettings(apply_preprocessing=False)`` or enable **Skip preprocessing**
-in the GUI so the time series is not downsampled or trimmed again.
+in the GUI so the time series is not downsampled or trimmed multiple times.
 
 ### Default preprocessing parameters
 
