@@ -17,10 +17,12 @@ or::
 from __future__ import annotations
 
 import argparse
+import importlib.resources
 import os
 import queue
 import threading
 import traceback
+from pathlib import Path
 from typing import Sequence
 
 import matplotlib
@@ -31,6 +33,7 @@ import tkinter as tk  # noqa: E402
 from tkinter import filedialog, font as tkfont, messagebox, ttk  # noqa: E402
 
 import numpy as np  # noqa: E402
+from PIL import Image, ImageTk  # noqa: E402
 from matplotlib.backends.backend_tkagg import (  # noqa: E402
     FigureCanvasTkAgg,
     NavigationToolbar2Tk,
@@ -66,12 +69,31 @@ NATIVE_CADENCE = "native (no downsampling)"
 CADENCE_LABELS = tuple(
     NATIVE_CADENCE if cadence is None else f"{cadence:g}" for cadence in CADENCE_CHOICES
 )
-MAX_PLOT_POINTS = 10**7 
+MAX_PLOT_POINTS = 10**7
 BYTES_PER_SAMPLE = 8
-#: Colours for the individual contributions; the total is always black.
+
+#: Mojito-themed palette derived from the app logo.
+THEME = {
+    "bg": "#f4faf6",
+    "surface": "#ffffff",
+    "header": "#1a4d32",
+    "accent": "#2d8b57",
+    "accent_hover": "#256f46",
+    "accent_light": "#d8f0e2",
+    "accent_muted": "#a0c4b0",
+    "text": "#1a3024",
+    "text_muted": "#5a7568",
+    "text_on_dark": "#ffffff",
+    "text_subtle_on_dark": "#c8e6d4",
+    "border": "#b8d4c4",
+    "error": "#b5453a",
+    "plot_total": "#1a4d32",
+    "plot_grid": "#c5ddd0",
+}
+#: Colours for the individual contributions; the total uses ``plot_total``.
 COMPONENT_COLORS = (
-    "tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple",
-    "tab:brown", "tab:pink", "tab:olive", "tab:cyan",
+    "#3d9970", "#e67e22", "#3498db", "#9b59b6", "#16a085",
+    "#d35400", "#8e44ad", "#27ae60", "#2980b9",
 )
 #: L1 sampling rate assumed only for the memory estimate shown before loading.
 NOMINAL_SOURCE_FS = 0.4
@@ -92,14 +114,32 @@ SCALED_FONTS = (
 #: Package-table column widths at scale 1.0, in pixels.
 TREE_COLUMN_WIDTHS = {"use": 44, "op": 36, "package": 300, "path": 420}
 
-BASE_WINDOW_SIZE = (1500, 1000)
-BASE_MIN_SIZE = (1040, 700)
-BASE_TREE_ROW_HEIGHT = 20
+BASE_WINDOW_SIZE = (1200, 780)
+BASE_MIN_SIZE = (820, 560)
+BASE_TREE_ROW_HEIGHT = 18
 BASE_FIGURE_DPI = 100
+#: DPI used when exporting plots via the matplotlib toolbar (screen stays at BASE_FIGURE_DPI).
+SAVE_FIGURE_DPI = 300
+BASE_TOOLBAR_HEIGHT = 28
 #: Section headings, relative to the body font.
-HEADING_FONT_RATIO = 1.1
+HEADING_FONT_RATIO = 1.05
 BASE_HINT_WRAPLENGTH = 200
-BASE_PROGRESS_LENGTH = 160
+BASE_PROGRESS_LENGTH = 140
+BASE_LOGO_SIZE = 30
+BASE_HEADER_TITLE_SIZE = 12
+BASE_HEADER_SUBTITLE_SIZE = 8
+
+
+matplotlib.rcParams["savefig.dpi"] = SAVE_FIGURE_DPI
+matplotlib.rcParams["savefig.bbox"] = "tight"
+
+
+def logo_path() -> Path:
+    """Return the bundled logo, falling back to a repo checkout for dev runs."""
+    try:
+        return Path(importlib.resources.files("mojito_barkeeper") / "assets" / "mojito_barkeeper_logo.png")
+    except (ModuleNotFoundError, TypeError, FileNotFoundError):
+        return Path(__file__).resolve().parents[2] / "assets" / "mojito_barkeeper_logo.png"
 
 
 def decimate_for_display(series: np.ndarray, max_points: int = MAX_PLOT_POINTS):
@@ -121,13 +161,16 @@ class MojitoPipelineGUI(tk.Tk):
         ui_scale: float | None = None,
     ) -> None:
         super().__init__()
-        self.title("Mojito L1 data processing")
+        self.title("Mojito Barkeeper")
+        self.configure(bg=THEME["bg"])
 
         self.packages: list[DataPackage] = []
         self.result = None
         self._worker: threading.Thread | None = None
         self._messages: queue.Queue = queue.Queue()
         self._drain_job: str | None = None
+        self._logo_photo: ImageTk.PhotoImage | None = None
+        self._logo_source = Image.open(logo_path()).convert("RGBA")
 
         stored = load_gui_state()
         # None means "pick up where the last session left off"; an explicit
@@ -148,6 +191,7 @@ class MojitoPipelineGUI(tk.Tk):
             name: tkfont.nametofont(name).cget("size") for name in SCALED_FONTS
         }
         self._style = ttk.Style(self)
+        self._apply_theme()
         # Widgets whose size is set in pixels rather than font units, so they
         # have to be rescaled by hand.
         self._section_toggles: list[ttk.Checkbutton] = []
@@ -177,6 +221,214 @@ class MojitoPipelineGUI(tk.Tk):
     def _set_tk_scaling(self, scale: float) -> None:
         """Tell Tk how many pixels make up a point at this display scale."""
         self.tk.call("tk", "scaling", scale * 96.0 / 72.0)
+
+    def _apply_theme(self) -> None:
+        """Apply the Mojito colour palette to ttk widgets."""
+        style = self._style
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        style.configure(".", background=THEME["bg"], foreground=THEME["text"])
+        style.configure("TFrame", background=THEME["bg"])
+        style.configure(
+            "Header.TFrame",
+            background=THEME["header"],
+        )
+        style.configure(
+            "TLabelframe",
+            background=THEME["bg"],
+            bordercolor=THEME["border"],
+            relief="solid",
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=THEME["bg"],
+            foreground=THEME["header"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.configure(
+            "TLabel",
+            background=THEME["bg"],
+            foreground=THEME["text"],
+        )
+        style.configure(
+            "Muted.TLabel",
+            background=THEME["bg"],
+            foreground=THEME["text_muted"],
+        )
+        style.configure(
+            "Error.TLabel",
+            background=THEME["bg"],
+            foreground=THEME["error"],
+        )
+        style.configure(
+            "TButton",
+            background=THEME["accent"],
+            foreground=THEME["text_on_dark"],
+            bordercolor=THEME["accent"],
+            focuscolor=THEME["accent_light"],
+            padding=(6, 3),
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("active", THEME["accent_hover"]),
+                ("disabled", THEME["accent_muted"]),
+            ],
+            foreground=[("disabled", "#e8f4ec")],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=THEME["header"],
+            bordercolor=THEME["header"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[
+                ("active", THEME["accent_hover"]),
+                ("disabled", THEME["accent_muted"]),
+            ],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=THEME["surface"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+            lightcolor=THEME["border"],
+            darkcolor=THEME["border"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=THEME["surface"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+            arrowcolor=THEME["accent"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", THEME["surface"])],
+            selectbackground=[("readonly", THEME["accent_light"])],
+        )
+        style.configure(
+            "Treeview",
+            background=THEME["surface"],
+            fieldbackground=THEME["surface"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=THEME["header"],
+            foreground=THEME["text_on_dark"],
+            relief="flat",
+            bordercolor=THEME["header"],
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", THEME["accent"])],
+            foreground=[("selected", THEME["text_on_dark"])],
+        )
+        style.configure(
+            "TNotebook",
+            background=THEME["bg"],
+            bordercolor=THEME["border"],
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=THEME["accent_light"],
+            foreground=THEME["text"],
+            padding=(8, 4),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", THEME["surface"])],
+            expand=[("selected", (1, 1, 1, 0))],
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=THEME["accent_light"],
+            background=THEME["accent"],
+            bordercolor=THEME["border"],
+            lightcolor=THEME["accent"],
+            darkcolor=THEME["accent"],
+        )
+        style.configure(
+            "TSeparator",
+            background=THEME["border"],
+        )
+        style.configure(
+            "HeaderTitle.TLabel",
+            background=THEME["header"],
+            foreground=THEME["text_on_dark"],
+            font=("TkDefaultFont", BASE_HEADER_TITLE_SIZE, "bold"),
+        )
+        style.configure(
+            "HeaderSubtitle.TLabel",
+            background=THEME["header"],
+            foreground=THEME["text_subtle_on_dark"],
+            font=("TkDefaultFont", BASE_HEADER_SUBTITLE_SIZE),
+        )
+        style.configure(
+            "HeaderLogo.TLabel",
+            background=THEME["header"],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=THEME["bg"],
+            foreground=THEME["text"],
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", THEME["accent_light"])],
+        )
+        style.configure(
+            "Section.TCheckbutton",
+            background=THEME["bg"],
+            foreground=THEME["header"],
+        )
+
+    def _refresh_plot_toolbars(self) -> None:
+        """Reserve enough vertical space for the matplotlib navigation buttons."""
+        height = max(24, int(round(BASE_TOOLBAR_HEIGHT * self._ui_scale)))
+        for toolbar in self._toolbars:
+            toolbar._rescale()
+            toolbar.configure(height=height)
+            toolbar.pack_propagate(False)
+
+    def _style_plot_axes(self, axis) -> None:
+        """Give matplotlib axes the same soft green look as the rest of the UI."""
+        axis.set_facecolor(THEME["surface"])
+        for spine in axis.spines.values():
+            spine.set_color(THEME["border"])
+        axis.tick_params(colors=THEME["text_muted"])
+        axis.xaxis.label.set_color(THEME["text"])
+        axis.yaxis.label.set_color(THEME["text"])
+        axis.title.set_color(THEME["header"])
+
+    def _refresh_logo(self, scale: float) -> None:
+        """Resize the header logo for the current display scale."""
+        if not hasattr(self, "_logo_label"):
+            return
+        size = max(20, int(round(BASE_LOGO_SIZE * scale)))
+        resized = self._logo_source.resize((size, size), Image.Resampling.LANCZOS)
+        self._logo_photo = ImageTk.PhotoImage(resized)
+        self._logo_label.configure(image=self._logo_photo)
+
+    def _refresh_header_fonts(self, scale: float) -> None:
+        """Keep the header typography in step with the UI scale."""
+        if not hasattr(self, "_header_title"):
+            return
+        title_size = max(10, int(round(BASE_HEADER_TITLE_SIZE * scale)))
+        subtitle_size = max(7, int(round(BASE_HEADER_SUBTITLE_SIZE * scale)))
+        self._style.configure(
+            "HeaderTitle.TLabel",
+            font=("TkDefaultFont", title_size, "bold"),
+        )
+        self._style.configure(
+            "HeaderSubtitle.TLabel",
+            font=("TkDefaultFont", subtitle_size),
+        )
 
     def apply_ui_scale(self, scale: float, *, remember: bool = True) -> None:
         """
@@ -214,21 +466,23 @@ class MojitoPipelineGUI(tk.Tk):
         self._style.configure(
             "Section.TCheckbutton",
             font=("TkDefaultFont", heading_size, "bold"),
+            foreground=THEME["header"],
         )
         self._filter_hint_label.configure(
             wraplength=int(round(BASE_HINT_WRAPLENGTH * scale))
         )
         self.progress.configure(length=int(round(BASE_PROGRESS_LENGTH * scale)))
 
+        self._refresh_logo(scale)
+        self._refresh_header_fonts(scale)
+
         for figure, canvas in (
             (self.figure, self.canvas_time),
             (self.figure_asd, self.canvas_asd),
         ):
-            figure.set_dpi(BASE_FIGURE_DPI * scale)
             figure.tight_layout()
             canvas.draw_idle()
-        for toolbar in self._toolbars:
-            toolbar._rescale()
+        self._refresh_plot_toolbars()
 
         self.minsize(*(int(round(value * scale)) for value in BASE_MIN_SIZE))
         self._resize_to_scale(scale)
@@ -341,7 +595,9 @@ class MojitoPipelineGUI(tk.Tk):
         self._update_cadence_hint()
 
     def _build_layout(self) -> None:
-        root_bar = ttk.Frame(self, padding=(10, 8, 10, 0))
+        self._build_header()
+
+        root_bar = ttk.Frame(self, padding=(8, 6, 8, 0))
         root_bar.pack(fill="x")
         ttk.Label(root_bar, text="Data directory").pack(side="left")
         entry = ttk.Entry(root_bar, textvariable=self.var_data_root)
@@ -370,12 +626,12 @@ class MojitoPipelineGUI(tk.Tk):
         # Vertical split so the package table and the plots can be resized
         # against each other instead of fighting for the same space.
         split = ttk.PanedWindow(self, orient="vertical")
-        split.pack(fill="both", expand=True, padx=10, pady=8)
+        split.pack(fill="both", expand=True, padx=8, pady=6)
 
         top = ttk.Frame(split)
         bottom = ttk.Frame(split)
-        split.add(top, weight=2)
-        split.add(bottom, weight=3)
+        split.add(top, weight=3)
+        split.add(bottom, weight=2)
 
         panes = ttk.PanedWindow(top, orient="horizontal")
         panes.pack(fill="both", expand=True)
@@ -390,6 +646,36 @@ class MojitoPipelineGUI(tk.Tk):
         self._build_save_options(bottom)
         self._build_plot_options(bottom)
         self._build_plot_area(bottom)
+
+    def _build_header(self) -> None:
+        header = ttk.Frame(self, style="Header.TFrame", padding=(8, 5))
+        header.pack(fill="x")
+
+        self._logo_label = ttk.Label(header, style="HeaderLogo.TLabel")
+        self._logo_label.pack(side="left")
+
+        titles = ttk.Frame(header, style="Header.TFrame")
+        titles.pack(side="left", padx=(10, 0))
+        self._header_title = ttk.Label(
+            titles,
+            text="Mojito Barkeeper",
+            style="HeaderTitle.TLabel",
+        )
+        self._header_title.pack(anchor="w")
+        ttk.Label(
+            titles,
+            text="Mojito L1 data loading, combining, and preprocessing",
+            style="HeaderSubtitle.TLabel",
+        ).pack(anchor="w")
+
+        self._refresh_logo(self._ui_scale)
+        self._refresh_header_fonts(self._ui_scale)
+        icon_size = max(16, int(round(24 * self._ui_scale)))
+        icon = ImageTk.PhotoImage(
+            self._logo_source.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+        )
+        self.iconphoto(True, icon)
+        self._icon_photo = icon
 
     def _build_package_panel(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text="Data packages  (click 'Use' to toggle, 'Op' to add/subtract)")
@@ -411,8 +697,8 @@ class MojitoPipelineGUI(tk.Tk):
         self.tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         scroll.pack(side="right", fill="y", pady=6, padx=(0, 6))
 
-        self.tree.tag_configure("enabled", background="#e8f4ea")
-        self.tree.tag_configure("disabled", foreground="#8a8a8a")
+        self.tree.tag_configure("enabled", background=THEME["accent_light"])
+        self.tree.tag_configure("disabled", foreground=THEME["text_muted"])
         self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<Double-1>", lambda _event: self.toggle_enabled())
 
@@ -444,7 +730,7 @@ class MojitoPipelineGUI(tk.Tk):
         ttk.Label(grid, text="from the file start (blank end = to the end)").grid(
             row=0, column=5, sticky="w"
         )
-        ttk.Label(grid, textvariable=self.var_memory, foreground="#555").grid(
+        ttk.Label(grid, textvariable=self.var_memory, style="Muted.TLabel").grid(
             row=1, column=0, columnspan=6, sticky="w", pady=(4, 0)
         )
 
@@ -528,7 +814,7 @@ class MojitoPipelineGUI(tk.Tk):
         ttk.Label(
             grid,
             text="Use for saved pipeline outputs to avoid downsampling/trim again",
-            foreground="#555",
+            style="Muted.TLabel",
         ).grid(row=row, column=0, columnspan=2, sticky="w")
 
         row += 1
@@ -553,7 +839,7 @@ class MojitoPipelineGUI(tk.Tk):
         )
         cadence.grid(row=row, column=1, sticky="w")
         row += 1
-        ttk.Label(grid, textvariable=self.var_cadence_hint, foreground="#555").grid(
+        ttk.Label(grid, textvariable=self.var_cadence_hint, style="Muted.TLabel").grid(
             row=row, column=1, sticky="w"
         )
         row += 1
@@ -590,7 +876,7 @@ class MojitoPipelineGUI(tk.Tk):
         self._filter_hint_label = ttk.Label(
             grid,
             textvariable=self.var_filter_hint,
-            foreground="#a33",
+            style="Error.TLabel",
             wraplength=BASE_HINT_WRAPLENGTH,
         )
         self._filter_hint_label.grid(row=row, column=1, sticky="w")
@@ -655,7 +941,7 @@ class MojitoPipelineGUI(tk.Tk):
             ttk.Entry(grid, textvariable=self.var_segment_days, width=14),
         ).grid(row=row, column=1, sticky="w")
         row += 1
-        ttk.Label(grid, text="(blank segment length = one segment)", foreground="#555").grid(
+        ttk.Label(grid, text="(blank segment length = one segment)", style="Muted.TLabel").grid(
             row=row, column=1, sticky="w"
         )
 
@@ -668,7 +954,9 @@ class MojitoPipelineGUI(tk.Tk):
     def _build_action_bar(self, parent: ttk.Frame) -> None:
         bar = ttk.Frame(parent, padding=(0, 4, 0, 6))
         bar.pack(fill="x")
-        self.run_button = ttk.Button(bar, text="Run pipeline", command=self.run_pipeline)
+        self.run_button = ttk.Button(
+            bar, text="Run pipeline", command=self.run_pipeline, style="Accent.TButton"
+        )
         self.run_button.pack(side="left")
         self.save_button = ttk.Button(
             bar, text="Save result…", command=self.save_result, state="disabled"
@@ -706,9 +994,9 @@ class MojitoPipelineGUI(tk.Tk):
 
     def _build_plot_options(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text="Plot options")
-        box.pack(fill="x", pady=(0, 6))
+        box.pack(fill="x", pady=(0, 4))
 
-        top = ttk.Frame(box, padding=(6, 4, 6, 0))
+        top = ttk.Frame(box, padding=(4, 2, 4, 0))
         top.pack(fill="x")
         ttk.Checkbutton(
             top,
@@ -718,10 +1006,10 @@ class MojitoPipelineGUI(tk.Tk):
         ttk.Label(
             top,
             text="(leave axis limits blank for autoscale)",
-            foreground="#555",
+            style="Muted.TLabel",
         ).pack(side="left", padx=(12, 0))
 
-        grid = ttk.Frame(box, padding=6)
+        grid = ttk.Frame(box, padding=4)
         grid.pack(fill="x")
 
         def axis_row(row: int, label: str, xmin, xmax, ymin, ymax) -> None:
@@ -758,30 +1046,38 @@ class MojitoPipelineGUI(tk.Tk):
         self.notebook = notebook
 
         # Small requested size; the canvas expands to fill whatever the pane gives it.
-        self.figure = Figure(figsize=(7, 3), dpi=100)
+        self.figure = Figure(figsize=(7, 3), dpi=BASE_FIGURE_DPI, facecolor=THEME["bg"])
         self.ax_time = self.figure.add_subplot(111)
         self.ax_time.set_xlabel("time [days]")
-        self.ax_time.set_ylabel("TDI (fractional frequency)")
-        self.ax_time.grid(alpha=0.3)
+        self.ax_time.set_ylabel("TDI")
+        self.ax_time.grid(alpha=0.45, color=THEME["plot_grid"])
+        self._style_plot_axes(self.ax_time)
 
-        self.figure_asd = Figure(figsize=(7, 3), dpi=100)
+        self.figure_asd = Figure(figsize=(7, 3), dpi=BASE_FIGURE_DPI, facecolor=THEME["bg"])
         self.ax_asd = self.figure_asd.add_subplot(111)
         self.ax_asd.set_xlabel("frequency [Hz]")
         self.ax_asd.set_ylabel("ASD [1/sqrt(Hz)]")
+        self._style_plot_axes(self.ax_asd)
 
         for figure, title in ((self.figure, "Time series"), (self.figure_asd, "Spectrum")):
             frame = ttk.Frame(notebook)
             notebook.add(frame, text=title)
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=0)
+
             canvas = FigureCanvasTkAgg(figure, master=frame)
-            canvas.get_tk_widget().pack(fill="both", expand=True)
+            canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
             toolbar = NavigationToolbar2Tk(canvas, frame, pack_toolbar=False)
             toolbar.update()
-            toolbar.pack(fill="x")
+            toolbar.grid(row=1, column=0, sticky="ew")
             self._toolbars.append(toolbar)
             if figure is self.figure:
                 self.canvas_time = canvas
             else:
                 self.canvas_asd = canvas
+
+        self._refresh_plot_toolbars()
 
         self.figure.tight_layout()
         self.figure_asd.tight_layout()
@@ -1217,7 +1513,7 @@ class MojitoPipelineGUI(tk.Tk):
             axis.set_ylim(bottom=ymin, top=ymax)
 
     def _plot(self, result) -> None:
-        """Draw the first channel: each contribution in colour, the total in black."""
+        """Draw the first channel: breakdown plus total, or a lone signal on its own."""
         title = f"{result.summary}   ({result.duration / 86400:.2f} d @ dt={result.dt:g} s)"
         channel = result.channels[0]
         time_limits = self._axis_limits(
@@ -1235,40 +1531,118 @@ class MojitoPipelineGUI(tk.Tk):
             prefix="Spectrum",
         )
 
+        components = result.components
+        single_signal = len(components) == 1 or (
+            not components and len(result.contributions) == 1
+        )
+
         self.ax_time.clear()
-        times = (result.times() - result.t0) / 86400.0
-        for component, color in zip(result.components, COMPONENT_COLORS):
+        times = (result.times()  / 86400.0 - 1131.133)
+        if single_signal and components:
+            component = components[0]
             index, values = decimate_for_display(component.series[channel])
             self.ax_time.plot(
-                times[index], values, lw=0.7, color=color, alpha=0.8,
+                times[index],
+                values,
+                lw=0.9,
+                color=COMPONENT_COLORS[0],
+                alpha=0.9,
                 label=component.signed_label,
             )
-        index, values = decimate_for_display(result.series[channel])
-        self.ax_time.plot(times[index], values, lw=0.9, color="black", label="total", zorder=0)
+        elif single_signal:
+            label = result.contributions[0]
+            index, values = decimate_for_display(result.series[channel])
+            self.ax_time.plot(
+                times[index],
+                values,
+                lw=0.9,
+                color=COMPONENT_COLORS[0],
+                alpha=0.9,
+                label=label,
+            )
+        else:
+            for component, color in zip(components, COMPONENT_COLORS):
+                index, values = decimate_for_display(component.series[channel])
+                self.ax_time.plot(
+                    times[index],
+                    values,
+                    lw=0.7,
+                    color=color,
+                    alpha=0.8,
+                    label=component.signed_label,
+                )
+            index, values = decimate_for_display(result.series[channel])
+            self.ax_time.plot(
+                times[index],
+                values,
+                lw=0.9,
+                color=THEME["plot_total"],
+                label="total",
+                zorder=0,
+            )
         self.ax_time.set_xlabel("time [days]")
-        self.ax_time.set_ylabel(f"TDI {channel} (fractional frequency)")
+        self.ax_time.set_ylabel(f"TDI {channel}")
         self.ax_time.set_title(title, fontsize=9)
-        self.ax_time.legend(loc="upper right", fontsize=8)
-        self.ax_time.grid(alpha=0.3)
+        self.ax_time.legend(loc="upper right", fontsize=8, framealpha=0.92)
+        self.ax_time.grid(alpha=0.45, color=THEME["plot_grid"])
+        self._style_plot_axes(self.ax_time)
         self._apply_axis_limits(self.ax_time, *time_limits)
         self.figure.tight_layout()
         self.canvas_time.draw_idle()
 
         self.ax_asd.clear()
-        for component, color in zip(result.components, COMPONENT_COLORS):
+        if single_signal and components:
+            component = components[0]
             freqs, asd = amplitude_spectral_density(component.series[channel], result.dt)
             self.ax_asd.loglog(
-                freqs, asd, lw=0.7, color=color, alpha=0.8, label=component.signed_label
+                freqs,
+                asd,
+                lw=0.9,
+                color=COMPONENT_COLORS[0],
+                alpha=0.9,
+                label=component.signed_label,
             )
-        freqs, asd = result.spectrum(channel)
-        self.ax_asd.loglog(freqs, asd, lw=0.9, color="black", label="total", zorder=0)
+        elif single_signal:
+            label = result.contributions[0]
+            freqs, asd = result.spectrum(channel)
+            self.ax_asd.loglog(
+                freqs,
+                asd,
+                lw=0.9,
+                color=COMPONENT_COLORS[0],
+                alpha=0.9,
+                label=label,
+            )
+        else:
+            for component, color in zip(components, COMPONENT_COLORS):
+                freqs, asd = amplitude_spectral_density(component.series[channel], result.dt)
+                self.ax_asd.loglog(
+                    freqs,
+                    asd,
+                    lw=0.7,
+                    color=color,
+                    alpha=0.8,
+                    label=component.signed_label,
+                )
+            freqs, asd = result.spectrum(channel)
+            self.ax_asd.loglog(
+                freqs,
+                asd,
+                lw=0.9,
+                color=THEME["plot_total"],
+                label="total",
+                zorder=0,
+            )
         self.ax_asd.set_xlabel("frequency [Hz]")
         self.ax_asd.set_ylabel(f"ASD of TDI {channel} [1/sqrt(Hz)]")
         self.ax_asd.set_title(title, fontsize=9)
-        self.ax_asd.legend(loc="upper right", fontsize=8)
-        self.ax_asd.grid(alpha=0.3, which="both")
+        self.ax_asd.legend(loc="lower left", fontsize=8, framealpha=0.92)
+        self.ax_asd.grid(alpha=0.45, color=THEME["plot_grid"], which="both")
+        self._style_plot_axes(self.ax_asd)
         self._apply_axis_limits(self.ax_asd, *spec_limits)
         self.figure_asd.tight_layout()
+
+
         self.canvas_asd.draw_idle()
 
     def save_result(self) -> None:

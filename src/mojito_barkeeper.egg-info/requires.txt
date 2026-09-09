@@ -1,0 +1,8 @@
+numpy
+matplotlib
+h5py
+mojito
+mojito-processor
+
+[dev]
+pytest

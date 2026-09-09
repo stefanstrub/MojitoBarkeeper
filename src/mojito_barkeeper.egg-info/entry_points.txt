@@ -1,0 +1,2 @@
+[console_scripts]
+mojito-barkeeper-gui = mojito_barkeeper.gui:main
